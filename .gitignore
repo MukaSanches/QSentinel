@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# .NET
+bin/
+obj/
+.vs/
+*.user
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# QSentinel generated data
+datasets/generated/
+benchmarks/results/
+quantum/benchmarks/results/
+
+# Secrets
+.env
+*.key
+*.pem
+secrets.json

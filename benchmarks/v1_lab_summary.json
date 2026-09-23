@@ -1,0 +1,39 @@
+{
+  "version": "1.0.0-dev",
+  "mass_scenarios": 40000,
+  "workers": 8,
+  "elapsed_seconds": 2.6910943230000157,
+  "scenarios_per_second": 14863.841693741988,
+  "safety_violations": 0,
+  "mean_recovery": 0.23604951160390023,
+  "mean_interventions": 1.68385,
+  "classical_validation": {
+    "comparisons": 100,
+    "mean_greedy_gap": 0.0,
+    "worst_greedy_gap": 0.0
+  },
+  "qaoa": {
+    "qubits": 7,
+    "exact_cost": -0.48643940347167963,
+    "bits": [
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+    ],
+    "cost": 1.376444146765442,
+    "expected_cost": 1.3221315793150925,
+    "probability": 0.09182440122223974,
+    "gamma": 5.543987035746694,
+    "beta": 0.5235987755982988,
+    "selected_names": [
+      "CloudSync",
+      "Telemetry",
+      "Launcher",
+      "Helper"
+    ]
+  }
+}
