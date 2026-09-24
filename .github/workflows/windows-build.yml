@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -57,3 +60,41 @@ jobs:
         with:
           name: QSentinel-Setup-Windows-x64
           path: dist/QSentinel-Setup-x64.exe
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "VERSION is empty."
+          }
+
+          $tag = "v$version"
+          $title = "QSentinel $version"
+          $installer = "dist/QSentinel-Setup-x64.exe"
+          $portable = "publish/QSentinel.exe"
+
+          if (-not (Test-Path $installer)) {
+            throw "Installer not found: $installer"
+          }
+
+          if (-not (Test-Path $portable)) {
+            throw "Portable executable not found: $portable"
+          }
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists. Updating its downloadable files."
+            gh release upload $tag $installer $portable --clobber --repo $env:GITHUB_REPOSITORY
+          }
+          else {
+            Write-Host "Creating release $tag."
+            gh release create $tag $installer $portable --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title $title --generate-notes
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release publication failed."
+          }
