@@ -9,6 +9,14 @@ public sealed class OptimizationEngine
     private readonly HashSet<int> optimized = new();
     private double adaptivePressure;
     private int calmTicks;
+    private readonly AdaptivePolicy policy = new();
+    private readonly SystemIntelligence intelligence = new();
+
+    public string DominantBottleneck => policy.DominantBottleneck;
+    public int BottleneckConfidence => policy.Confidence;
+    public double AvailableMemoryMb => intelligence.AvailableMemoryMb;
+    public double CommitPercent => intelligence.CommitPercent;
+    public string MemoryState => intelligence.MemoryState;
 
     public long InterventionCount { get; private set; }
     public long BlockedLaunches { get; private set; }
@@ -22,6 +30,8 @@ public sealed class OptimizationEngine
     public void Tick(IReadOnlyList<ProcessInfo> processes, SystemMetrics metrics, bool force = false)
     {
         EnforceBlockList(processes);
+        intelligence.Tick(metrics, processes);
+        policy.Tick(intelligence);
 
         if (!settings.OptimizationEnabled)
         {
@@ -61,7 +71,7 @@ public sealed class OptimizationEngine
             .Select(x => new
             {
                 Process = x,
-                Score = Score(x, metrics)
+                Score = Score(x, metrics, policy)
             })
             .OrderByDescending(x => x.Score)
             .Take(limit)
@@ -77,13 +87,13 @@ public sealed class OptimizationEngine
             Optimize(candidate, metrics);
     }
 
-    private static double Score(ProcessInfo p, SystemMetrics metrics)
+    private static double Score(ProcessInfo p, SystemMetrics metrics, AdaptivePolicy policy)
     {
         // Weight the resource that is actually under pressure instead of applying
         // the same fixed rule to every machine and workload.
-        double cpuWeight = metrics.CpuPercent >= 70 ? 5.0 : 2.5;
-        double memWeight = metrics.MemoryPercent >= 75 ? 1.5 : 0.7;
-        double ioWeight = metrics.IoMbPerSecond >= 20 ? 5.0 : 2.0;
+        double cpuWeight = Math.Max(policy.CpuWeight, metrics.CpuPercent >= 70 ? 5.0 : 2.5);
+        double memWeight = Math.Max(policy.MemoryWeight, metrics.MemoryPercent >= 75 ? 1.5 : 0.7);
+        double ioWeight = Math.Max(policy.IoWeight, metrics.IoMbPerSecond >= 20 ? 5.0 : 2.0);
 
         return p.CpuPercent * cpuWeight
              + (p.MemoryMb / 200d) * memWeight
@@ -116,7 +126,7 @@ public sealed class OptimizationEngine
             NativeSystem.SetEco(process, true);
 
             // Lower memory priority only under genuine memory pressure.
-            if (metrics.MemoryPercent >= 82 && info.MemoryMb >= 500)
+            if ((metrics.MemoryPercent >= 82 || intelligence.CommitPercent >= 80 || intelligence.AvailableMemoryMb < 600) && info.MemoryMb >= 400)
                 NativeSystem.SetMemoryPriority(process, 3);
 
             if (optimized.Add(info.Id)) InterventionCount++;
