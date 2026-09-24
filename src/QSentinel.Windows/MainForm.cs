@@ -170,7 +170,7 @@ public sealed class MainForm : Form
 
         var edition = new Label
         {
-            Text = "SYSTEM ORCHESTRATOR  •  V1.3",
+            Text = "SYSTEM ORCHESTRATOR  •  V1.4",
             ForeColor = TextSecondary,
             Font = new Font("Segoe UI Semibold", 7.5f),
             AutoSize = true,
@@ -651,7 +651,7 @@ public sealed class MainForm : Form
             ioChart.AddPoint(metrics.IoMbPerSecond);
 
             pressureLabel.Text =
-                $"PRESSÃO {metrics.Pressure:N0}/100  •  REDE {network.State}  ↓{network.ReceiveMbps:N1} ↑{network.SendMbps:N1} Mbps  •  GW {network.GatewayLatencyMs:N0} ms";
+                $"PRESSÃO {metrics.Pressure:N0}/100 • GARGALO {optimizer.DominantBottleneck} {optimizer.BottleneckConfidence}% • RAM LIVRE {optimizer.AvailableMemoryMb:N0} MB • COMMIT {optimizer.CommitPercent:N0}% • REDE {network.State} {network.HealthScore}/100 ↓{network.ReceiveMbps:N1} ↑{network.SendMbps:N1} Mbps • GW {network.GatewayLatencyMs:N0} ms • PERDA {network.PacketLossPercent:N1}%";
 
             grid.SuspendLayout();
             grid.Rows.Clear();

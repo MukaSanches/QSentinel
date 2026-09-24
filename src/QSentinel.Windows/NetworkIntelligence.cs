@@ -9,6 +9,9 @@ public sealed class NetworkIntelligence
     private long lastTx;
     private DateTime lastSample = DateTime.UtcNow;
     private int ticks;
+    private double lossEwma;
+    private long lastErrors;
+    private long lastDiscards;
     private bool tcpChecked;
     private double latencyEwma;
 
@@ -16,6 +19,10 @@ public sealed class NetworkIntelligence
     public double SendMbps { get; private set; }
     public double GatewayLatencyMs { get; private set; }
     public string State { get; private set; } = "INICIANDO";
+    public double PacketLossPercent { get; private set; }
+    public long InterfaceErrorsDelta { get; private set; }
+    public long InterfaceDiscardsDelta { get; private set; }
+    public int HealthScore { get; private set; } = 100;
     public long DiagnosticRuns { get; private set; }
 
     public void Tick()
@@ -28,7 +35,7 @@ public sealed class NetworkIntelligence
                             n.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
                 .ToList();
 
-            long rx = 0, tx = 0;
+            long rx = 0, tx = 0, errors = 0, discards = 0;
             foreach (var nic in adapters)
             {
                 try
@@ -36,6 +43,8 @@ public sealed class NetworkIntelligence
                     var s = nic.GetIPv4Statistics();
                     rx += s.BytesReceived;
                     tx += s.BytesSent;
+                    errors += s.IncomingPacketsWithErrors + s.OutgoingPacketsWithErrors;
+                    discards += s.IncomingPacketsDiscarded + s.OutgoingPacketsDiscarded;
                 }
                 catch { }
             }
@@ -47,8 +56,12 @@ public sealed class NetworkIntelligence
                 ReceiveMbps = Math.Max(0, (rx - lastRx) * 8d / 1_000_000d / seconds);
                 SendMbps = Math.Max(0, (tx - lastTx) * 8d / 1_000_000d / seconds);
             }
+            InterfaceErrorsDelta = Math.Max(0, errors - lastErrors);
+            InterfaceDiscardsDelta = Math.Max(0, discards - lastDiscards);
             lastRx = rx;
             lastTx = tx;
+            lastErrors = errors;
+            lastDiscards = discards;
             lastSample = now;
 
             if (!tcpChecked)
@@ -58,12 +71,16 @@ public sealed class NetworkIntelligence
             }
 
             // Latency probing is intentionally sparse: diagnostics must not become network load.
-            if (++ticks % 20 == 0)
+            if (++ticks % 12 == 0)
                 ProbeGateway(adapters);
 
+            int penalty = (int)Math.Min(100, Math.Max(0, GatewayLatencyMs - 20) / 2 + PacketLossPercent * 7 + Math.Min(25, InterfaceErrorsDelta * 5) + Math.Min(20, InterfaceDiscardsDelta * 2));
+            HealthScore = Math.Clamp(100 - penalty, 0, 100);
             State = adapters.Count == 0 ? "SEM REDE" :
+                    PacketLossPercent >= 10 ? "PERDA DE PACOTES" :
                     GatewayLatencyMs >= 120 ? "LATÊNCIA ALTA" :
-                    GatewayLatencyMs >= 60 ? "ATENÇÃO" : "ESTÁVEL";
+                    InterfaceErrorsDelta > 0 ? "ERROS NO LINK" :
+                    HealthScore < 70 ? "DEGRADADA" : "ESTÁVEL";
         }
         catch
         {
@@ -83,13 +100,21 @@ public sealed class NetworkIntelligence
             if (gateway is null) return;
 
             using var ping = new Ping();
-            var reply = ping.Send(gateway, 300);
-            DiagnosticRuns++;
-            if (reply?.Status != IPStatus.Success) return;
-
-            double sample = reply.RoundtripTime;
-            latencyEwma = latencyEwma == 0 ? sample : latencyEwma * 0.75 + sample * 0.25;
-            GatewayLatencyMs = latencyEwma;
+            int sent = 3, lost = 0, ok = 0; double total = 0;
+            for (int i = 0; i < sent; i++)
+            {
+                var reply = ping.Send(gateway, 350); DiagnosticRuns++;
+                if (reply?.Status == IPStatus.Success) { total += reply.RoundtripTime; ok++; } else lost++;
+            }
+            if (ok > 0)
+            {
+                double sample = total / ok;
+                latencyEwma = latencyEwma == 0 ? sample : latencyEwma * 0.78 + sample * 0.22;
+                GatewayLatencyMs = latencyEwma;
+            }
+            double loss = lost * 100d / sent;
+            lossEwma = lossEwma == 0 ? loss : lossEwma * 0.75 + loss * 0.25;
+            PacketLossPercent = lossEwma;
         }
         catch { }
     }
