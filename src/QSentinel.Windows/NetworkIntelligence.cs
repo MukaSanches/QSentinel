@@ -14,6 +14,8 @@ public sealed class NetworkIntelligence
     private long lastDiscards;
     private bool tcpChecked;
     private double latencyEwma;
+    private int degradedTicks;
+    private DateTime lastSafeRepair = DateTime.MinValue;
 
     public double ReceiveMbps { get; private set; }
     public double SendMbps { get; private set; }
@@ -24,6 +26,7 @@ public sealed class NetworkIntelligence
     public long InterfaceDiscardsDelta { get; private set; }
     public int HealthScore { get; private set; } = 100;
     public long DiagnosticRuns { get; private set; }
+    public long AutomaticRepairs { get; private set; }
 
     public void Tick()
     {
@@ -81,6 +84,15 @@ public sealed class NetworkIntelligence
                     GatewayLatencyMs >= 120 ? "LATÊNCIA ALTA" :
                     InterfaceErrorsDelta > 0 ? "ERROS NO LINK" :
                     HealthScore < 70 ? "DEGRADADA" : "ESTÁVEL";
+
+            if (State == "ESTÁVEL") degradedTicks = 0; else degradedTicks++;
+            if (degradedTicks >= 10 && DateTime.UtcNow - lastSafeRepair > TimeSpan.FromMinutes(20))
+            {
+                SafeResolverRecovery();
+                lastSafeRepair = DateTime.UtcNow;
+                degradedTicks = 0;
+                AutomaticRepairs++;
+            }
         }
         catch
         {
@@ -115,6 +127,24 @@ public sealed class NetworkIntelligence
             double loss = lost * 100d / sent;
             lossEwma = lossEwma == 0 ? loss : lossEwma * 0.75 + loss * 0.25;
             PacketLossPercent = lossEwma;
+        }
+        catch { }
+    }
+
+    private static void SafeResolverRecovery()
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = "ipconfig.exe",
+                Arguments = "/flushdns",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            });
+            p?.WaitForExit(1500);
         }
         catch { }
     }
