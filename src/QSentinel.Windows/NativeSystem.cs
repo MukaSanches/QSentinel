@@ -226,6 +226,28 @@ internal static class NativeSystem
         catch { }
     }
 
+    public static void ResetEco(Process process)
+    {
+        try
+        {
+            // ControlMask=0 returns QoS decisions to Windows heuristics instead of
+            // forcing HighQoS after QSentinel stops managing the process.
+            var state = new PROCESS_POWER_THROTTLING_STATE
+            {
+                Version = PowerVersion,
+                ControlMask = 0,
+                StateMask = 0
+            };
+
+            SetProcessInformationPower(
+                process.Handle,
+                PROCESS_INFORMATION_CLASS.ProcessPowerThrottling,
+                ref state,
+                (uint)Marshal.SizeOf<PROCESS_POWER_THROTTLING_STATE>());
+        }
+        catch { }
+    }
+
     public static void SetMemoryPriority(Process process, uint priority)
     {
         try

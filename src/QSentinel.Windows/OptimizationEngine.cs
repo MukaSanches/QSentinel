@@ -5,134 +5,121 @@ namespace QSentinel;
 public sealed class OptimizationEngine
 {
     private readonly AppSettings settings;
-
-    private readonly Dictionary<int, ProcessPriorityClass> originalPriority =
-        new();
-
-    private readonly HashSet<int> optimized =
-        new();
+    private readonly Dictionary<int, ProcessPriorityClass> originalPriority = new();
+    private readonly HashSet<int> optimized = new();
+    private double adaptivePressure;
+    private int calmTicks;
 
     public long InterventionCount { get; private set; }
     public long BlockedLaunches { get; private set; }
-
     public int OptimizedCount => optimized.Count;
+    public double AdaptivePressure => adaptivePressure;
 
-    public OptimizationEngine(AppSettings settings)
-    {
-        this.settings = settings;
-    }
+    public OptimizationEngine(AppSettings settings) => this.settings = settings;
 
-    public bool IsOptimized(int pid) =>
-        optimized.Contains(pid);
+    public bool IsOptimized(int pid) => optimized.Contains(pid);
 
-    public void Tick(
-        IReadOnlyList<ProcessInfo> processes,
-        SystemMetrics metrics,
-        bool force = false)
+    public void Tick(IReadOnlyList<ProcessInfo> processes, SystemMetrics metrics, bool force = false)
     {
         EnforceBlockList(processes);
 
         if (!settings.OptimizationEnabled)
         {
             RestoreAll();
+            adaptivePressure = 0;
+            calmTicks = 0;
             return;
         }
 
-        double pressure =
-            force
-                ? Math.Max(metrics.Pressure, 70)
-                : metrics.Pressure;
+        // EWMA prevents one short spike from causing process churn.
+        double observed = force ? Math.Max(metrics.Pressure, 75) : metrics.Pressure;
+        adaptivePressure = adaptivePressure == 0
+            ? observed
+            : adaptivePressure * 0.72 + observed * 0.28;
 
-        if (pressure < 35)
+        // Hysteresis: enter optimization under pressure, leave only after sustained calm.
+        if (!force && adaptivePressure < 32)
         {
-            RestoreAll();
+            calmTicks++;
+            if (calmTicks >= 4) RestoreAll();
             return;
         }
+        calmTicks = 0;
+
+        if (!force && adaptivePressure < 42 && optimized.Count == 0)
+            return;
 
         int limit =
-            pressure >= 80 ? 8 :
-            pressure >= 65 ? 5 :
-            3;
+            adaptivePressure >= 85 ? 8 :
+            adaptivePressure >= 70 ? 5 :
+            adaptivePressure >= 52 ? 3 : 2;
 
-        var candidates =
-            processes
-                .Where(SafetyEngine.CanOptimize)
-                .Where(x => !settings.IsBlocked(x.Name))
-                .Where(x =>
-                    x.CpuPercent >= 1 ||
-                    x.MemoryMb >= 400 ||
-                    x.IoMbPerSecond >= 1)
-                .OrderByDescending(
-                    x =>
-                        x.CpuPercent * 4 +
-                        x.MemoryMb / 200d +
-                        x.IoMbPerSecond * 3)
-                .Take(limit)
-                .ToList();
+        var candidates = processes
+            .Where(SafetyEngine.CanOptimize)
+            .Where(x => !settings.IsBlocked(x.Name))
+            .Where(x => x.CpuPercent >= 1 || x.MemoryMb >= 400 || x.IoMbPerSecond >= 1)
+            .Select(x => new
+            {
+                Process = x,
+                Score = Score(x, metrics)
+            })
+            .OrderByDescending(x => x.Score)
+            .Take(limit)
+            .Select(x => x.Process)
+            .ToList();
 
-        var targets =
-            candidates
-                .Select(x => x.Id)
-                .ToHashSet();
+        var targets = candidates.Select(x => x.Id).ToHashSet();
 
         foreach (int pid in optimized.ToList())
-        {
-            if (!targets.Contains(pid))
-                RestoreProcess(pid);
-        }
+            if (!targets.Contains(pid)) RestoreProcess(pid);
 
         foreach (var candidate in candidates)
             Optimize(candidate, metrics);
     }
 
-    private void Optimize(
-        ProcessInfo info,
-        SystemMetrics metrics)
+    private static double Score(ProcessInfo p, SystemMetrics metrics)
+    {
+        // Weight the resource that is actually under pressure instead of applying
+        // the same fixed rule to every machine and workload.
+        double cpuWeight = metrics.CpuPercent >= 70 ? 5.0 : 2.5;
+        double memWeight = metrics.MemoryPercent >= 75 ? 1.5 : 0.7;
+        double ioWeight = metrics.IoMbPerSecond >= 20 ? 5.0 : 2.0;
+
+        return p.CpuPercent * cpuWeight
+             + (p.MemoryMb / 200d) * memWeight
+             + p.IoMbPerSecond * ioWeight;
+    }
+
+    private void Optimize(ProcessInfo info, SystemMetrics metrics)
     {
         try
         {
-            using var process =
-                Process.GetProcessById(info.Id);
-
+            using var process = Process.GetProcessById(info.Id);
             ProcessPriorityClass original;
+            try { original = process.PriorityClass; }
+            catch { return; }
 
-            try
-            {
-                original = process.PriorityClass;
-            }
-            catch
-            {
-                return;
-            }
-
-            if (original is
-                ProcessPriorityClass.High or
-                ProcessPriorityClass.RealTime or
-                ProcessPriorityClass.AboveNormal)
+            if (original is ProcessPriorityClass.High or ProcessPriorityClass.RealTime or ProcessPriorityClass.AboveNormal)
                 return;
 
             if (!originalPriority.ContainsKey(info.Id))
                 originalPriority[info.Id] = original;
 
-            try
+            // Only lower scheduler priority when CPU pressure is material.
+            if (metrics.CpuPercent >= 65)
             {
-                process.PriorityClass =
-                    ProcessPriorityClass.BelowNormal;
+                try { process.PriorityClass = ProcessPriorityClass.BelowNormal; }
+                catch { }
             }
-            catch { }
 
+            // EcoQoS is the documented Windows mechanism for non-foreground work.
             NativeSystem.SetEco(process, true);
 
-            if (metrics.MemoryPercent >= 72 &&
-                info.MemoryMb >= 400)
-            {
-                NativeSystem.SetMemoryPriority(
-                    process,
-                    3);
-            }
+            // Lower memory priority only under genuine memory pressure.
+            if (metrics.MemoryPercent >= 82 && info.MemoryMb >= 500)
+                NativeSystem.SetMemoryPriority(process, 3);
 
-            if (optimized.Add(info.Id))
-                InterventionCount++;
+            if (optimized.Add(info.Id)) InterventionCount++;
         }
         catch
         {
@@ -143,29 +130,21 @@ public sealed class OptimizationEngine
 
     public void RestoreAll()
     {
-        foreach (int pid in optimized.ToList())
-            RestoreProcess(pid);
+        foreach (int pid in optimized.ToList()) RestoreProcess(pid);
     }
 
     private void RestoreProcess(int pid)
     {
         try
         {
-            using var process =
-                Process.GetProcessById(pid);
-
-            if (originalPriority.TryGetValue(
-                pid,
-                out var priority))
+            using var process = Process.GetProcessById(pid);
+            if (originalPriority.TryGetValue(pid, out var priority))
             {
-                try
-                {
-                    process.PriorityClass = priority;
-                }
+                try { process.PriorityClass = priority; }
                 catch { }
             }
 
-            NativeSystem.SetEco(process, false);
+            NativeSystem.ResetEco(process);
             NativeSystem.SetMemoryPriority(process, 5);
         }
         catch { }
@@ -174,25 +153,15 @@ public sealed class OptimizationEngine
         originalPriority.Remove(pid);
     }
 
-    private void EnforceBlockList(
-        IReadOnlyList<ProcessInfo> processes)
+    private void EnforceBlockList(IReadOnlyList<ProcessInfo> processes)
     {
         foreach (var info in processes)
         {
-            if (!settings.IsBlocked(info.Name))
-                continue;
-
-            if (!SafetyEngine.CanOptimize(info))
-                continue;
-
+            if (!settings.IsBlocked(info.Name) || !SafetyEngine.CanOptimize(info)) continue;
             try
             {
-                using var process =
-                    Process.GetProcessById(info.Id);
-
-                process.Kill(
-                    entireProcessTree: false);
-
+                using var process = Process.GetProcessById(info.Id);
+                process.Kill(entireProcessTree: false);
                 BlockedLaunches++;
             }
             catch { }
