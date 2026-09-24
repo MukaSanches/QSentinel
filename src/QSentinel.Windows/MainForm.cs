@@ -10,6 +10,8 @@ public sealed class MainForm : Form
     private readonly SystemMonitor monitor = new();
     private readonly OptimizationEngine optimizer;
     private readonly NetworkIntelligence network = new();
+    private readonly HardwareIntelligence hardware = new();
+    private readonly AutonomousGuardian guardian = new();
 
     private readonly System.Windows.Forms.Timer timer = new();
     private readonly NotifyIcon tray = new();
@@ -170,7 +172,7 @@ public sealed class MainForm : Form
 
         var edition = new Label
         {
-            Text = "SYSTEM ORCHESTRATOR  •  V1.4",
+            Text = "AUTONOMOUS GUARDIAN  •  V1.5",
             ForeColor = TextSecondary,
             Font = new Font("Segoe UI Semibold", 7.5f),
             AutoSize = true,
@@ -627,10 +629,13 @@ public sealed class MainForm : Form
         {
             latest = monitor.Capture();
             network.Tick();
+            hardware.Tick(latest.Metrics);
 
             optimizer.Tick(
                 latest.Processes,
                 latest.Metrics);
+
+            guardian.Tick(latest.Metrics, optimizer, network, hardware);
 
             var metrics = latest.Metrics;
 
@@ -651,7 +656,7 @@ public sealed class MainForm : Form
             ioChart.AddPoint(metrics.IoMbPerSecond);
 
             pressureLabel.Text =
-                $"PRESSÃO {metrics.Pressure:N0}/100 • GARGALO {optimizer.DominantBottleneck} {optimizer.BottleneckConfidence}% • RAM LIVRE {optimizer.AvailableMemoryMb:N0} MB • COMMIT {optimizer.CommitPercent:N0}% • REDE {network.State} {network.HealthScore}/100 ↓{network.ReceiveMbps:N1} ↑{network.SendMbps:N1} Mbps • GW {network.GatewayLatencyMs:N0} ms • PERDA {network.PacketLossPercent:N1}%";
+                $"AUTO {guardian.Mode} N{guardian.Intensity} • PRESSÃO {metrics.Pressure:N0}/100 • GARGALO {optimizer.DominantBottleneck} {optimizer.BottleneckConfidence}% • RAM LIVRE {optimizer.AvailableMemoryMb:N0} MB • COMMIT {optimizer.CommitPercent:N0}% • CPU {hardware.CpuClockMhz:N0}/{hardware.CpuMaxClockMhz:N0} MHz • {hardware.ThermalState} • DISCO {hardware.StorageKind}/{hardware.DiskHealth} {hardware.DiskTemperatureC:N0}°C • REDE {network.State} {network.HealthScore}/100 ↓{network.ReceiveMbps:N1} ↑{network.SendMbps:N1} Mbps • GW {network.GatewayLatencyMs:N0} ms • PERDA {network.PacketLossPercent:N1}%";
 
             grid.SuspendLayout();
             grid.Rows.Clear();
