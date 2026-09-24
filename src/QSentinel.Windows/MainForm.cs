@@ -9,6 +9,7 @@ public sealed class MainForm : Form
 
     private readonly SystemMonitor monitor = new();
     private readonly OptimizationEngine optimizer;
+    private readonly NetworkIntelligence network = new();
 
     private readonly System.Windows.Forms.Timer timer = new();
     private readonly NotifyIcon tray = new();
@@ -169,7 +170,7 @@ public sealed class MainForm : Form
 
         var edition = new Label
         {
-            Text = "SYSTEM ORCHESTRATOR  •  V1.1",
+            Text = "SYSTEM ORCHESTRATOR  •  V1.3",
             ForeColor = TextSecondary,
             Font = new Font("Segoe UI Semibold", 7.5f),
             AutoSize = true,
@@ -289,7 +290,7 @@ public sealed class MainForm : Form
         var subtitle = new Label
         {
             Text =
-                "O motor adaptativo monitora CPU, memória e I/O " +
+                "O motor adaptativo monitora CPU, memória, I/O e rede " +
                 "e reduz o impacto de tarefas em segundo plano.",
             AutoSize = true,
             ForeColor = TextSecondary,
@@ -625,6 +626,7 @@ public sealed class MainForm : Form
         try
         {
             latest = monitor.Capture();
+            network.Tick();
 
             optimizer.Tick(
                 latest.Processes,
@@ -649,7 +651,7 @@ public sealed class MainForm : Form
             ioChart.AddPoint(metrics.IoMbPerSecond);
 
             pressureLabel.Text =
-                $"PRESSÃO DO SISTEMA  {metrics.Pressure:N0}/100";
+                $"PRESSÃO {metrics.Pressure:N0}/100  •  REDE {network.State}  ↓{network.ReceiveMbps:N1} ↑{network.SendMbps:N1} Mbps  •  GW {network.GatewayLatencyMs:N0} ms";
 
             grid.SuspendLayout();
             grid.Rows.Clear();
